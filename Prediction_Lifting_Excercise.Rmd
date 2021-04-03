@@ -1,0 +1,129 @@
+---
+  output: md_document
+---
+
+# Practical Machine Learning - Course Project: Prediction Lifting Exercise
+
+RB,   
+02.04.2021
+ 
+```{r results='hide', message=FALSE, warning=FALSE}
+library(data.table)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lattice)
+library(knitr)
+library(rmarkdown)
+```
+
+## I. Load training and test data set
+The data for this project come from the Human Activity Recognition project:
+*Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012.*
+
+*Excercise: Prediction of body movements based on the measured accelerometer-sensor data* 
+
+```{r}
+train <- read.csv("train/pml-training.csv", sep = ",", dec = ".")
+test  <- read.csv("test/pml-testing.csv", sep = ",", dec = ".")
+```
+
+## II. Explaratory Data Analyis and cleaning data
+1. What is the structure of the data - number of variables and observations?
+
+```{r}
+dim(train)
+```
+
+2. Removing unnecessary variables/columns which mostly consists NAs.
+
+Firstly, removing na-columns and columns with little variation. 
+
+```{r}
+library(caret)
+train_clean <- train[,colMeans(is.na(train)) < .95] # filter out na-columns (with mainly Nas)
+train_clean <- train_clean[,-nearZeroVar(train_clean)] # filter out variables with near zero variance
+dim(train_clean)
+```
+
+To have a first look at the data use a simple decision tree:
+
+```{r}
+library(rpart)
+library(rpart.plot)
+model_rpart<- train(classe ~ ., method = "rpart", data = train_clean)
+rpart.plot(model_rpart$finalModel)
+model_rpart
+```
+
+Looks like the data is pre-ordered by the variable X. This result is confirmed by plotting the
+X variable against the class-label which shows that they are highly correlated.
+
+```{r}
+qplot(train_clean$classe, train_clean$X, xlab = "Class_Label" , ylab = "X_Index",  geom="boxplot", fill = train_clean$classe)
+```
+
+Therefore columns consisting metadata (spurious correlations/order in the data) should be removed as prediction should be based only on *measured sensor data*.
+
+```{r}
+train_clean <- train_clean[,-c(1:7)] # filter out metadata
+dim(train_clean)
+```
+
+```{r}
+model_rpart<- train(classe ~ ., method = "rpart", data = train_clean)
+rpart.plot(model_rpart$finalModel)
+model_rpart
+```
+
+Removing the X-variable was the right decision as can be seen from the updated rpart model.
+
+## III. Model building and training: Random Forest
+For this classification excercise we will use Random Forest as the classification model ("wisdom of the crowd") as it is expected to predict better than a simple decision tree model (encountered with over-fitting).
+
+```{r}
+set.seed(1234)
+```
+
+To accelerate computation use the parallel mode of the caret package:
+```{r}
+library(foreach)
+library(iterators)
+library(parallel)
+library(doParallel)
+```
+
+```{r}
+cluster <- makeCluster(detectCores() - 1) # one core is left for the operating system
+registerDoParallel(cluster)
+train_param <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+RandomForest <- train(classe ~., method = "rf", ntree = 501, trControl = train_param, data = train_clean) # mtry should be sqrt(number of random variables used for each node in each tree)
+# ntree number of bootstrap replicates
+## close parallel mode 
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+**Results**: Confusion matrix and estimated out of back error rate of the random forest model using five-fold cross validation and an 501 trees (odd number) to break ties.
+
+```{r}
+RandomForest$finalModel
+```
+
+## IV. Prediction of random forest on test data sets
+
+To answer the quiz the trained random forest model is used to predict the 5 classes (A, B, C, D, and E) for the 20 test cases. Note the trained random forest model is tested with the test data sets which are similarly pre-processed as the training sets and without pre-processing yielding the same classification results.
+
+```{r}
+test_clean <- test[,colMeans(is.na(test)) < .95] # filter out na-columns
+test_clean <- test_clean[,-c(1:7)] # filter out  metadata - should be irrelevant for the prediction
+dim(test_clean)
+```
+
+```{r}
+prediction_clean <- predict(RandomForest, test_clean)
+prediction       <- predict(RandomForest, test)
+print(prediction_clean)
+print(prediction)
+```
